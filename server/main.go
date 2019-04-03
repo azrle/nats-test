@@ -4,18 +4,48 @@ import (
 	"encoding/binary"
 	"log"
 	"strconv"
+	"sync"
 	"time"
 
 	nats "github.com/nats-io/go-nats"
 )
 
 const (
-	connNum           = 2
-	channelNumPerConn = 100
-	payLoadSize       = 512
+	workerNum           = 2
+	channelNumPerWorker = 100
+	payLoadSize         = 512
 )
 
-func callback(id uint64, nc *nats.Conn) func(m *nats.Msg) {
+type worker struct {
+	id      uint64
+	in, out *nats.Conn
+}
+
+func createWorker(id uint64) (*worker, error) {
+	in, err := nats.Connect(nats.DefaultURL)
+	if err != nil {
+		return nil, err
+	}
+	out, err := nats.Connect(nats.DefaultURL)
+	if err != nil {
+		return nil, err
+	}
+	return &worker{
+		id:  id,
+		in:  in,
+		out: out,
+	}, nil
+}
+
+func (w *worker) run() {
+	var id uint64
+	for id = w.id * channelNumPerWorker; id < (w.id+1)*channelNumPerWorker; id++ {
+		w.in.QueueSubscribe("join", "channels", w.callback(id))
+	}
+	<-time.NewTimer(time.Hour).C
+}
+
+func (w *worker) callback(cid uint64) func(m *nats.Msg) {
 	payload := make([]byte, payLoadSize)
 	return func(m *nats.Msg) {
 		if len(m.Data) < 23 {
@@ -28,30 +58,26 @@ func callback(id uint64, nc *nats.Conn) func(m *nats.Msg) {
 		if now.After(pubTime.Add(2 * time.Second)) {
 			log.Printf("Latency detected from client %d, pub time: %s", clientID, pubTime)
 		}
-		binary.LittleEndian.PutUint64(payload[:8], id)
-		nc.Publish("client_"+strconv.FormatUint(clientID, 10), payload)
 		// do something
+		binary.LittleEndian.PutUint64(payload[:8], cid)
+		w.out.Publish("client_"+strconv.FormatUint(clientID, 10), payload)
 	}
-}
-
-func createConn(cid uint64) {
-	nc, err := nats.Connect(nats.DefaultURL)
-	if err != nil {
-		log.Printf("Failed to connect to nats server: %v.", err)
-		return
-	}
-	var id uint64
-	for id = cid * channelNumPerConn; id < (cid+1)*channelNumPerConn; id++ {
-		nc.QueueSubscribe("join", "channels", callback(id, nc))
-	}
-	<-time.NewTimer(time.Hour).C
 }
 
 func main() {
+	var wg sync.WaitGroup
 	var i uint64
-	for i = 0; i < connNum; i++ {
-		go createConn(i)
+	for i = 0; i < workerNum; i++ {
+		w, err := createWorker(i)
+		if err != nil {
+			log.Fatalf("Failed to create worker: %v.", err)
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			w.run()
+		}()
 	}
 	log.Printf("Ready.")
-	<-time.NewTimer(time.Hour).C
+	wg.Wait()
 }
