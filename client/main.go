@@ -31,7 +31,7 @@ func runClient(cid uint64) {
 			defer wg.Done()
 			sub, err := nc.SubscribeSync("client_" + strconv.FormatUint(id, 10))
 			if err != nil {
-				log.Printf("Failed to subscribe subject %s: %v.", sub.Subject, err)
+				log.Printf("[%d] Failed to subscribe subject %s: %v.", id, sub.Subject, err)
 				return
 			}
 			payload := make([]byte, payLoadSize)
@@ -45,7 +45,7 @@ func runClient(cid uint64) {
 			// msg, err := sub.NextMsgWithContext(ctx)
 			_, err = sub.NextMsgWithContext(ctx)
 			if err != nil {
-				log.Printf("Failed to read from nats server: %v.", err)
+				log.Printf("[%d] Failed to read from nats server: %v.", id, err)
 				return
 			}
 			// log.Printf("Server [%d] responsed.", binary.LittleEndian.Uint64(msg.Data[:8]))
